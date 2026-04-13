@@ -75,15 +75,30 @@ def test_stamp_pdf_multiple_pages(tmp_path, stamp_image):
 
 
 def test_stamp_pdf_with_scale(sample_pdf, stamp_image, tmp_path):
-    output = str(tmp_path / "output.pdf")
+    """Stamp with scale=50 should produce a rect half the width of scale=100."""
+    output_100 = str(tmp_path / "output_100.pdf")
+    output_50 = str(tmp_path / "output_50.pdf")
+
     stamp_pdf(
         pdf_path=sample_pdf,
         stamp_path=stamp_image,
-        output_path=output,
-        x=0.0,
-        y=0.0,
-        scale=50,
-        opacity=100,
-        page_indices=[0],
+        output_path=output_100,
+        x=0.0, y=0.0, scale=100, opacity=100, page_indices=[0],
     )
-    assert os.path.exists(output)
+    stamp_pdf(
+        pdf_path=sample_pdf,
+        stamp_path=stamp_image,
+        output_path=output_50,
+        x=0.0, y=0.0, scale=50, opacity=100, page_indices=[0],
+    )
+
+    doc100 = fitz.open(output_100)
+    doc50 = fitz.open(output_50)
+    rects100 = doc100[0].get_image_rects(doc100.get_page_images(0)[0][0])
+    rects50 = doc50[0].get_image_rects(doc50.get_page_images(0)[0][0])
+    doc100.close()
+    doc50.close()
+
+    w100 = rects100[0].width
+    w50 = rects50[0].width
+    assert abs(w50 - w100 / 2) < 2.0, f"Expected scale=50 width to be ~{w100/2:.1f}, got {w50:.1f}"
