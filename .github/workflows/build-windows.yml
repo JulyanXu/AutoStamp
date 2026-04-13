@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:   # 允许手动触发
 
+permissions:
+  contents: write   # needed to create releases and upload assets
+
 jobs:
   build:
     runs-on: windows-latest
@@ -31,7 +34,9 @@ jobs:
 
       - name: Get version / date tag
         id: tag
-        run: echo "tag=build-$(date +'%Y%m%d-%H%M')" >> $env:GITHUB_OUTPUT
+        run: |
+          $tag = "build-" + (Get-Date -Format "yyyyMMdd-HHmm")
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
       - name: Create GitHub Release
