@@ -102,3 +102,31 @@ def test_stamp_pdf_with_scale(sample_pdf, stamp_image, tmp_path):
     w100 = rects100[0].width
     w50 = rects50[0].width
     assert abs(w50 - w100 / 2) < 2.0, f"Expected scale=50 width to be ~{w100/2:.1f}, got {w50:.1f}"
+
+
+def test_stamp_pdf_invalid_scale(sample_pdf, stamp_image, tmp_path):
+    output = str(tmp_path / "output.pdf")
+    with pytest.raises(ValueError):
+        stamp_pdf(
+            pdf_path=sample_pdf, stamp_path=stamp_image, output_path=output,
+            x=0.0, y=0.0, scale=0, opacity=100, page_indices=[0],
+        )
+    with pytest.raises(ValueError):
+        stamp_pdf(
+            pdf_path=sample_pdf, stamp_path=stamp_image, output_path=output,
+            x=0.0, y=0.0, scale=-10, opacity=100, page_indices=[0],
+        )
+
+
+def test_stamp_pdf_invalid_opacity(sample_pdf, stamp_image, tmp_path):
+    output = str(tmp_path / "output.pdf")
+    with pytest.raises(ValueError):
+        stamp_pdf(
+            pdf_path=sample_pdf, stamp_path=stamp_image, output_path=output,
+            x=0.0, y=0.0, scale=100, opacity=101, page_indices=[0],
+        )
+    with pytest.raises(ValueError):
+        stamp_pdf(
+            pdf_path=sample_pdf, stamp_path=stamp_image, output_path=output,
+            x=0.0, y=0.0, scale=100, opacity=-1, page_indices=[0],
+        )
