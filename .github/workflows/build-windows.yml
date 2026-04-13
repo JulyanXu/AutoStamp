@@ -1,0 +1,51 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # 允许手动触发
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: python build.py
+
+      - name: Zip the dist folder
+        run: |
+          Compress-Archive -Path dist\AutoStamp\* -DestinationPath AutoStamp-Windows.zip
+        shell: pwsh
+
+      - name: Get version / date tag
+        id: tag
+        run: echo "tag=build-$(date +'%Y%m%d-%H%M')" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "AutoStamp ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## 使用说明
+            1. 下载 `AutoStamp-Windows.zip`
+            2. 解压到任意目录
+            3. 双击 `AutoStamp.exe` 运行
+
+            **要求：** Windows 系统已安装 Microsoft Word / Excel（用于转换 .docx / .xlsx 文件）。纯 PDF 盖章无需 Office。
+          files: AutoStamp-Windows.zip
+          draft: false
+          prerelease: false
