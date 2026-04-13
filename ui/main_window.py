@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from core.config import AppConfig
-from core.converter import convert_to_pdf, find_libreoffice
+from core.converter import convert_to_pdf, conversion_prerequisite_error
 from core.batch import BatchWorker
 from ui.file_list_widget import FileListWidget
 from ui.preview_widget import PreviewWidget
@@ -114,16 +114,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先选择印章图片。")
             return
 
-        lo = find_libreoffice()
-        has_office_files = any(
-            os.path.splitext(f)[1].lower() in (".docx", ".xlsx") for f in file_list
-        )
-        if has_office_files and not lo:
-            QMessageBox.critical(
-                self, "错误",
-                "文件列表中包含 Word/Excel 文件，但未找到 LibreOffice。\n"
-                "请确保 LibreOffice 已安装或放置在程序目录下的 libreoffice/ 文件夹中。",
-            )
+        prerequisite_error = conversion_prerequisite_error(file_list)
+        if prerequisite_error:
+            QMessageBox.critical(self, "错误", prerequisite_error)
             return
 
         self.start_btn.setVisible(False)
