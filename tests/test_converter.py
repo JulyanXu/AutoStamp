@@ -51,6 +51,28 @@ def test_convert_docx_on_windows_uses_docx2pdf(tmp_path, monkeypatch):
     assert calls == [(str(docx_file), str(expected_pdf))]
 
 
+def test_convert_docx_on_windows_handles_windowed_stdio(tmp_path, monkeypatch):
+    """PyInstaller --windowed sets stdio to None; docx2pdf still writes progress."""
+    docx_file = tmp_path / "test.docx"
+    docx_file.write_bytes(b"fake docx")
+    output_dir = tmp_path / "out"
+    expected_pdf = output_dir / "test.pdf"
+
+    def fake_convert(source, destination):
+        sys.stdout.write("starting")
+        sys.stderr.write("progress")
+        expected_pdf.write_bytes(b"%PDF-1.4 fake content")
+
+    monkeypatch.setattr(converter.platform, "system", lambda: "Windows")
+    monkeypatch.setitem(sys.modules, "docx2pdf", types.SimpleNamespace(convert=fake_convert))
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    result = convert_to_pdf(str(docx_file), str(output_dir))
+
+    assert result == str(expected_pdf)
+
+
 def test_convert_xlsx_on_windows_uses_excel_com(tmp_path, monkeypatch):
     """Windows Excel conversion should use local MS Excel through COM."""
     xlsx_file = tmp_path / "test.xlsx"

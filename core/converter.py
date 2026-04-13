@@ -1,7 +1,10 @@
+from contextlib import contextmanager
+import io
 import os
 import platform
 import shutil
 import subprocess
+import sys
 
 
 SUPPORTED_EXTENSIONS = {".docx", ".xlsx", ".pdf"}
@@ -80,7 +83,8 @@ def _convert_docx_with_docx2pdf(input_path: str, temp_dir: str) -> str:
         raise RuntimeError("缺少 docx2pdf 依赖，无法转换 Word 文件。请重新安装或重新打包程序。") from e
 
     try:
-        convert(input_path, output_path)
+        with _writable_stdio():
+            convert(input_path, output_path)
     except Exception as e:
         raise RuntimeError(
             f"转换失败: {os.path.basename(input_path)}\n"
@@ -90,6 +94,21 @@ def _convert_docx_with_docx2pdf(input_path: str, temp_dir: str) -> str:
     if not os.path.exists(output_path):
         raise RuntimeError(f"转换后未找到输出文件: {output_path}")
     return output_path
+
+
+@contextmanager
+def _writable_stdio():
+    stdout = sys.stdout
+    stderr = sys.stderr
+    if sys.stdout is None:
+        sys.stdout = io.StringIO()
+    if sys.stderr is None:
+        sys.stderr = io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout = stdout
+        sys.stderr = stderr
 
 
 def _convert_xlsx_with_excel(input_path: str, temp_dir: str) -> str:
