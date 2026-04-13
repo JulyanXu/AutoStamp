@@ -1,14 +1,22 @@
-from contextlib import contextmanager
-import io
 import os
 import platform
 import shutil
 import subprocess
-import sys
 
 
 SUPPORTED_EXTENSIONS = {".docx", ".xlsx", ".pdf"}
+WD_FORMAT_PDF = 17
 XL_TYPE_PDF = 0
+WORD_BACKENDS = [
+    ("Microsoft Word", "Word.Application"),
+    ("WPS Writer", "KWPS.Application"),
+    ("WPS Writer", "WPS.Application"),
+]
+SPREADSHEET_BACKENDS = [
+    ("Microsoft Excel", "Excel.Application"),
+    ("WPS Spreadsheets", "KET.Application"),
+    ("WPS Spreadsheets", "ET.Application"),
+]
 
 
 def find_libreoffice() -> str | None:
@@ -31,10 +39,8 @@ def conversion_prerequisite_error(file_paths: list[str]) -> str | None:
         return None
 
     if platform.system() == "Windows":
-        if ".docx" in office_exts and not _module_available("docx2pdf"):
-            return "缺少 docx2pdf 依赖，无法转换 Word 文件。请重新安装或重新打包程序。"
-        if ".xlsx" in office_exts and not _module_available("win32com.client"):
-            return "缺少 pywin32/win32com 依赖，无法调用 Excel 转换文件。请重新安装或重新打包程序。"
+        if not _module_available("win32com.client"):
+            return "缺少 pywin32/win32com 依赖，无法调用 Microsoft Office 或 WPS 转换文件。请重新安装或重新打包程序。"
         return None
 
     if not find_libreoffice():
@@ -63,9 +69,9 @@ def convert_to_pdf(input_path: str, temp_dir: str) -> str:
     os.makedirs(temp_dir, exist_ok=True)
     if platform.system() == "Windows":
         if ext == ".docx":
-            return _convert_docx_with_docx2pdf(input_path, temp_dir)
+            return _convert_docx_with_windows_office(input_path, temp_dir)
         if ext == ".xlsx":
-            return _convert_xlsx_with_excel(input_path, temp_dir)
+            return _convert_xlsx_with_windows_office(input_path, temp_dir)
 
     return _convert_with_libreoffice(input_path, temp_dir)
 
@@ -75,71 +81,115 @@ def _output_path(input_path: str, temp_dir: str) -> str:
     return os.path.join(temp_dir, base + ".pdf")
 
 
-def _convert_docx_with_docx2pdf(input_path: str, temp_dir: str) -> str:
+def _import_win32_client():
+    import win32com.client
+
+    return win32com.client
+
+
+def _dispatch(client, prog_id: str):
+    dispatch = getattr(client, "DispatchEx", None) or client.Dispatch
+    return dispatch(prog_id)
+
+
+def _set_quiet(app) -> None:
+    for attr, value in (("Visible", False), ("DisplayAlerts", False)):
+        try:
+            setattr(app, attr, value)
+        except Exception:
+            pass
+
+
+def _safe_close(obj, method_name: str, *args) -> None:
+    if obj is None:
+        return
+    try:
+        getattr(obj, method_name)(*args)
+    except Exception:
+        pass
+
+
+def _format_backend_errors(errors: list[tuple[str, str, Exception]]) -> str:
+    return "; ".join(
+        f"{name} ({prog_id}): {error}" for name, prog_id, error in errors
+    )
+
+
+def _convert_docx_with_windows_office(input_path: str, temp_dir: str) -> str:
     output_path = _output_path(input_path, temp_dir)
     try:
-        from docx2pdf import convert
+        client = _import_win32_client()
     except ImportError as e:
-        raise RuntimeError("缺少 docx2pdf 依赖，无法转换 Word 文件。请重新安装或重新打包程序。") from e
+        raise RuntimeError("缺少 pywin32/win32com 依赖，无法调用 Microsoft Word 或 WPS Writer 转换文件。请重新安装或重新打包程序。") from e
 
+    errors = []
+    for name, prog_id in WORD_BACKENDS:
+        try:
+            _convert_docx_with_writer_backend(client, prog_id, input_path, output_path)
+            if os.path.exists(output_path):
+                return output_path
+            raise RuntimeError(f"转换后未找到输出文件: {output_path}")
+        except Exception as e:
+            errors.append((name, prog_id, e))
+
+    raise RuntimeError(
+        f"转换失败: {os.path.basename(input_path)}\n"
+        "请确认电脑已安装 Microsoft Word 或 WPS Office，并且文件未被占用。\n"
+        f"详情: {_format_backend_errors(errors)}"
+    )
+
+
+def _convert_docx_with_writer_backend(client, prog_id: str, input_path: str, output_path: str) -> None:
+    app = None
+    doc = None
     try:
-        with _writable_stdio():
-            convert(input_path, output_path)
-    except Exception as e:
-        raise RuntimeError(
-            f"转换失败: {os.path.basename(input_path)}\n"
-            f"请确认电脑已安装 Microsoft Word。\n详情: {e}"
-        ) from e
-
-    if not os.path.exists(output_path):
-        raise RuntimeError(f"转换后未找到输出文件: {output_path}")
-    return output_path
-
-
-@contextmanager
-def _writable_stdio():
-    stdout = sys.stdout
-    stderr = sys.stderr
-    if sys.stdout is None:
-        sys.stdout = io.StringIO()
-    if sys.stderr is None:
-        sys.stderr = io.StringIO()
-    try:
-        yield
+        app = _dispatch(client, prog_id)
+        _set_quiet(app)
+        doc = app.Documents.Open(input_path)
+        try:
+            doc.SaveAs2(output_path, FileFormat=WD_FORMAT_PDF)
+        except AttributeError:
+            doc.SaveAs(output_path, FileFormat=WD_FORMAT_PDF)
     finally:
-        sys.stdout = stdout
-        sys.stderr = stderr
+        _safe_close(doc, "Close", False)
+        _safe_close(app, "Quit")
 
 
-def _convert_xlsx_with_excel(input_path: str, temp_dir: str) -> str:
+def _convert_xlsx_with_windows_office(input_path: str, temp_dir: str) -> str:
     output_path = _output_path(input_path, temp_dir)
     try:
-        import win32com.client
+        client = _import_win32_client()
     except ImportError as e:
-        raise RuntimeError("缺少 pywin32/win32com 依赖，无法调用 Excel 转换文件。请重新安装或重新打包程序。") from e
+        raise RuntimeError("缺少 pywin32/win32com 依赖，无法调用 Microsoft Excel 或 WPS 表格转换文件。请重新安装或重新打包程序。") from e
 
-    excel = None
+    errors = []
+    for name, prog_id in SPREADSHEET_BACKENDS:
+        try:
+            _convert_xlsx_with_spreadsheet_backend(client, prog_id, input_path, output_path)
+            if os.path.exists(output_path):
+                return output_path
+            raise RuntimeError(f"转换后未找到输出文件: {output_path}")
+        except Exception as e:
+            errors.append((name, prog_id, e))
+
+    raise RuntimeError(
+        f"转换失败: {os.path.basename(input_path)}\n"
+        "请确认电脑已安装 Microsoft Excel 或 WPS Office，并且文件未被占用。\n"
+        f"详情: {_format_backend_errors(errors)}"
+    )
+
+
+def _convert_xlsx_with_spreadsheet_backend(client, prog_id: str, input_path: str, output_path: str) -> None:
+    app = None
     workbook = None
     try:
-        excel = win32com.client.DispatchEx("Excel.Application")
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        workbook = excel.Workbooks.Open(input_path)
+        app = _dispatch(client, prog_id)
+        _set_quiet(app)
+        workbook = app.Workbooks.Open(input_path)
         workbook.ExportAsFixedFormat(XL_TYPE_PDF, output_path)
-    except Exception as e:
-        raise RuntimeError(
-            f"转换失败: {os.path.basename(input_path)}\n"
-            f"请确认电脑已安装 Microsoft Excel。\n详情: {e}"
-        ) from e
     finally:
-        if workbook is not None:
-            workbook.Close(False)
-        if excel is not None:
-            excel.Quit()
-
-    if not os.path.exists(output_path):
-        raise RuntimeError(f"转换后未找到输出文件: {output_path}")
-    return output_path
+        _safe_close(workbook, "Close", False)
+        _safe_close(app, "Quit")
 
 
 def _convert_with_libreoffice(input_path: str, temp_dir: str) -> str:

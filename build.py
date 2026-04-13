@@ -34,7 +34,7 @@ def main():
         print("\nNext steps:")
         print(f"1. Zip the entire '{dist_dir}' folder for distribution")
         print(f"2. Users extract the zip and run {app_name}.exe")
-        print(f"   (Microsoft Word/Excel must be installed on the target machine for .docx/.xlsx conversion)")
+        print(f"   (Microsoft Word/Excel or WPS Office must be installed on the target machine for .docx/.xlsx conversion)")
 
 
 if __name__ == "__main__":

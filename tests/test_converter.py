@@ -1,4 +1,3 @@
-import builtins
 import sys
 import subprocess
 import types
@@ -24,53 +23,120 @@ def test_convert_unsupported_format(tmp_path):
 
 def test_windows_prerequisites_do_not_require_libreoffice(monkeypatch):
     monkeypatch.setattr(converter.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(converter, "_module_available", lambda module_name: True, raising=False)
+    monkeypatch.setattr(converter, "_module_available", lambda module_name: module_name == "win32com.client", raising=False)
     monkeypatch.setattr(converter, "find_libreoffice", lambda: None, raising=False)
 
     assert converter.conversion_prerequisite_error(["a.docx", "b.xlsx"]) is None
 
 
-def test_convert_docx_on_windows_uses_docx2pdf(tmp_path, monkeypatch):
-    """Windows Word conversion should use local MS Office through docx2pdf."""
+def test_convert_docx_on_windows_uses_word_com(tmp_path, monkeypatch):
+    """Windows Word conversion should call the Word COM automation backend."""
     docx_file = tmp_path / "test.docx"
     docx_file.write_bytes(b"fake docx")
     output_dir = tmp_path / "out"
     expected_pdf = output_dir / "test.pdf"
-    calls = []
+    calls = {"dispatch": [], "open": [], "save": [], "close": [], "quit": []}
 
-    def fake_convert(source, destination):
-        calls.append((source, destination))
-        expected_pdf.write_bytes(b"%PDF-1.4 fake content")
+    class FakeDocument:
+        def SaveAs2(self, destination, FileFormat):
+            calls["save"].append((destination, FileFormat))
+            expected_pdf.write_bytes(b"%PDF-1.4 fake content")
+
+        def Close(self, save_changes=False):
+            calls["close"].append(save_changes)
+
+    class FakeDocuments:
+        def Open(self, source):
+            calls["open"].append(source)
+            return FakeDocument()
+
+    class FakeWord:
+        def __init__(self):
+            self.Documents = FakeDocuments()
+
+        def Quit(self):
+            calls["quit"].append(True)
+
+    def fake_dispatch(prog_id):
+        calls["dispatch"].append(prog_id)
+        return FakeWord()
 
     monkeypatch.setattr(converter.platform, "system", lambda: "Windows")
-    monkeypatch.setitem(sys.modules, "docx2pdf", types.SimpleNamespace(convert=fake_convert))
+    fake_client = types.SimpleNamespace(DispatchEx=fake_dispatch)
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=fake_client))
+    monkeypatch.setitem(sys.modules, "win32com.client", fake_client)
 
     result = convert_to_pdf(str(docx_file), str(output_dir))
 
     assert result == str(expected_pdf)
-    assert calls == [(str(docx_file), str(expected_pdf))]
+    assert calls["dispatch"] == ["Word.Application"]
+    assert calls["open"] == [str(docx_file)]
+    assert calls["save"] == [(str(expected_pdf), 17)]
+    assert calls["close"] == [False]
+    assert calls["quit"] == [True]
 
 
-def test_convert_docx_on_windows_handles_windowed_stdio(tmp_path, monkeypatch):
-    """PyInstaller --windowed sets stdio to None; docx2pdf still writes progress."""
+def test_convert_docx_on_windows_falls_back_to_wps_writer(tmp_path, monkeypatch):
+    """If Microsoft Word cannot save the file, try WPS Writer."""
     docx_file = tmp_path / "test.docx"
     docx_file.write_bytes(b"fake docx")
     output_dir = tmp_path / "out"
     expected_pdf = output_dir / "test.pdf"
+    dispatched = []
 
-    def fake_convert(source, destination):
-        sys.stdout.write("starting")
-        sys.stderr.write("progress")
-        expected_pdf.write_bytes(b"%PDF-1.4 fake content")
+    class BrokenDocument:
+        def SaveAs2(self, destination, FileFormat):
+            raise RuntimeError("Open.SaveAs")
+
+        def Close(self, save_changes=False):
+            pass
+
+    class BrokenDocuments:
+        def Open(self, source):
+            return BrokenDocument()
+
+    class BrokenWord:
+        def __init__(self):
+            self.Documents = BrokenDocuments()
+
+        def Quit(self):
+            pass
+
+    class WpsDocument:
+        def SaveAs(self, destination, FileFormat):
+            expected_pdf.write_bytes(b"%PDF-1.4 fake content")
+
+        def Close(self, save_changes=False):
+            pass
+
+    class WpsDocuments:
+        def Open(self, source):
+            return WpsDocument()
+
+    class WpsWriter:
+        def __init__(self):
+            self.Documents = WpsDocuments()
+
+        def Quit(self):
+            pass
+
+    def fake_dispatch(prog_id):
+        dispatched.append(prog_id)
+        if prog_id == "Word.Application":
+            return BrokenWord()
+        if prog_id == "KWPS.Application":
+            return WpsWriter()
+        raise RuntimeError("not installed")
 
     monkeypatch.setattr(converter.platform, "system", lambda: "Windows")
-    monkeypatch.setitem(sys.modules, "docx2pdf", types.SimpleNamespace(convert=fake_convert))
-    monkeypatch.setattr(sys, "stdout", None)
-    monkeypatch.setattr(sys, "stderr", None)
+    fake_client = types.SimpleNamespace(DispatchEx=fake_dispatch)
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=fake_client))
+    monkeypatch.setitem(sys.modules, "win32com.client", fake_client)
 
     result = convert_to_pdf(str(docx_file), str(output_dir))
 
     assert result == str(expected_pdf)
+    assert dispatched == ["Word.Application", "KWPS.Application"]
 
 
 def test_convert_xlsx_on_windows_uses_excel_com(tmp_path, monkeypatch):
@@ -121,22 +187,61 @@ def test_convert_xlsx_on_windows_uses_excel_com(tmp_path, monkeypatch):
     assert quit_called == [True]
 
 
-def test_convert_docx_on_windows_missing_docx2pdf(tmp_path, monkeypatch):
+def test_convert_xlsx_on_windows_falls_back_to_wps_spreadsheets(tmp_path, monkeypatch):
+    """If Microsoft Excel is unavailable, try WPS Spreadsheets."""
+    xlsx_file = tmp_path / "test.xlsx"
+    xlsx_file.write_bytes(b"fake xlsx")
+    output_dir = tmp_path / "out"
+    expected_pdf = output_dir / "test.pdf"
+    dispatched = []
+
+    class FakeWorkbook:
+        def ExportAsFixedFormat(self, output_type, destination):
+            expected_pdf.write_bytes(b"%PDF-1.4 fake content")
+
+        def Close(self, save_changes=False):
+            pass
+
+    class FakeWorkbooks:
+        def Open(self, source):
+            return FakeWorkbook()
+
+    class FakeWpsSpreadsheet:
+        def __init__(self):
+            self.Workbooks = FakeWorkbooks()
+
+        def Quit(self):
+            pass
+
+    def fake_dispatch(prog_id):
+        dispatched.append(prog_id)
+        if prog_id == "Excel.Application":
+            raise RuntimeError("Excel missing")
+        if prog_id == "KET.Application":
+            return FakeWpsSpreadsheet()
+        raise RuntimeError("not installed")
+
+    monkeypatch.setattr(converter.platform, "system", lambda: "Windows")
+    fake_client = types.SimpleNamespace(DispatchEx=fake_dispatch)
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=fake_client))
+    monkeypatch.setitem(sys.modules, "win32com.client", fake_client)
+
+    result = convert_to_pdf(str(xlsx_file), str(output_dir))
+
+    assert result == str(expected_pdf)
+    assert dispatched == ["Excel.Application", "KET.Application"]
+
+
+def test_convert_docx_on_windows_missing_win32com(tmp_path, monkeypatch):
     docx_file = tmp_path / "test.docx"
     docx_file.write_bytes(b"fake docx")
 
     monkeypatch.setattr(converter.platform, "system", lambda: "Windows")
-    monkeypatch.delitem(sys.modules, "docx2pdf", raising=False)
-    original_import = builtins.__import__
+    monkeypatch.delitem(sys.modules, "win32com", raising=False)
+    monkeypatch.delitem(sys.modules, "win32com.client", raising=False)
+    monkeypatch.setattr(converter, "_import_win32_client", lambda: (_ for _ in ()).throw(ImportError("blocked")), raising=False)
 
-    def fake_import(name, *args, **kwargs):
-        if name == "docx2pdf":
-            raise ImportError("blocked")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    with pytest.raises(RuntimeError, match="docx2pdf"):
+    with pytest.raises(RuntimeError, match="win32com"):
         convert_to_pdf(str(docx_file), str(tmp_path / "out"))
 
 
