@@ -1,14 +1,8 @@
 import os
-import platform
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
-from core.converter import find_libreoffice, convert_to_pdf
-
-
-def test_find_libreoffice_returns_string():
-    # May return None if LibreOffice not installed, but should not raise
-    result = find_libreoffice()
-    assert result is None or isinstance(result, str)
+from core.converter import convert_to_pdf
 
 
 def test_convert_pdf_passthrough(tmp_path):
@@ -26,9 +20,25 @@ def test_convert_unsupported_format(tmp_path):
         convert_to_pdf(str(txt_file), str(tmp_path / "out"))
 
 
-@patch("core.converter.find_libreoffice", return_value=None)
-def test_convert_docx_no_libreoffice(mock_find, tmp_path):
+def test_convert_docx_missing_docx2pdf(tmp_path):
+    """If docx2pdf is not importable, RuntimeError with helpful message."""
     docx_file = tmp_path / "test.docx"
     docx_file.write_bytes(b"fake docx")
-    with pytest.raises(RuntimeError, match="LibreOffice"):
-        convert_to_pdf(str(docx_file), str(tmp_path / "out"))
+
+    mock_modules = dict(sys.modules)
+    mock_modules["docx2pdf"] = None
+    with patch.dict("sys.modules", {"docx2pdf": None}):
+        with pytest.raises((RuntimeError, ImportError)):
+            convert_to_pdf(str(docx_file), str(tmp_path / "out"))
+
+
+def test_convert_docx_conversion_failure(tmp_path):
+    """When docx2pdf.convert raises, RuntimeError with friendly message."""
+    docx_file = tmp_path / "test.docx"
+    docx_file.write_bytes(b"fake docx")
+
+    mock_docx2pdf = MagicMock()
+    mock_docx2pdf.convert.side_effect = Exception("Word COM error")
+    with patch.dict("sys.modules", {"docx2pdf": mock_docx2pdf}):
+        with pytest.raises(RuntimeError, match="转换失败"):
+            convert_to_pdf(str(docx_file), str(tmp_path / "out"))

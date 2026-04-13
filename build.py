@@ -32,9 +32,9 @@ def main():
 
     if system == "Windows":
         print("\nNext steps:")
-        print(f"1. Copy LibreOffice Portable to: {dist_dir}/libreoffice/")
-        print(f"2. Zip the entire '{dist_dir}' folder for distribution")
-        print(f"3. Users extract the zip and run {app_name}.exe")
+        print(f"1. Zip the entire '{dist_dir}' folder for distribution")
+        print(f"2. Users extract the zip and run {app_name}.exe")
+        print(f"   (Microsoft Word/Excel must be installed on the target machine for .docx/.xlsx conversion)")
 
 
 if __name__ == "__main__":
